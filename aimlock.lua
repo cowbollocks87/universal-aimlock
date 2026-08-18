@@ -1,6 +1,7 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local TeleportService = game:GetService("TeleportService")
 local Camera = workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
 
@@ -11,6 +12,8 @@ local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
 
 local Options = Library.Options
 local Toggles = Library.Toggles
+
+local SCRIPT_URL = "https://raw.githubusercontent.com/cowbollocks87/universal-aimlock/refs/heads/main/aimlock.lua"
 
 local Cfg = {
     AimlockEnabled = false,
@@ -1278,6 +1281,48 @@ Library.ToggleKeybind = Options.MenuKeybind
 
 MenuGroup:AddToggle("ShowCursor", {Text = "Custom Cursor", Default = true})
 Toggles.ShowCursor:OnChanged(function() Library.ShowCustomCursor = Toggles.ShowCursor.Value end)
+
+MenuGroup:AddDivider()
+
+MenuGroup:AddButton({
+    Text = "Load Infinite Yield",
+    Func = function()
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/EdgeIY/infiniteyield/master/source"))()
+    end,
+    Tooltip = "Loads Infinite Yield into the current session",
+})
+
+MenuGroup:AddDivider()
+
+local function queueScript()
+    if queue_on_teleport then
+        queue_on_teleport(string.format('loadstring(game:HttpGet("%s"))()', SCRIPT_URL))
+    end
+end
+
+MenuGroup:AddButton({
+    Text = "Rejoin",
+    Tooltip = "Rejoins the current server. Script auto-executes on arrival.",
+    Func = function()
+        queueScript()
+        if #Players:GetPlayers() <= 1 then
+            Players.LocalPlayer:Kick("\nRejoining...")
+            task.wait(0.3)
+            TeleportService:Teleport(game.PlaceId, Players.LocalPlayer)
+        else
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, Players.LocalPlayer)
+        end
+    end,
+})
+
+MenuGroup:AddButton({
+    Text = "Server Hop",
+    Tooltip = "Teleports to a fresh server. Script auto-executes on arrival.",
+    Func = function()
+        queueScript()
+        TeleportService:Teleport(game.PlaceId, Players.LocalPlayer)
+    end,
+})
 
 MenuGroup:AddDivider()
 
