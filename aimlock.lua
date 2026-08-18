@@ -25,10 +25,12 @@ local Cfg = {
     FOVCircleColor = Color3.fromRGB(255, 255, 255),
     FOVCircleTransparency = 0.2,
     ESPEnabled = true,
+    ESPMode = "Standard",
     ESPHighlights = true,
     HighlightMode = "AlwaysOnTop",
     ESPTracers = true,
     ESPNames = true,
+    ESPDistance = true,
     NameType = "Display",
     ESPColor = Color3.fromRGB(255, 255, 255),
     ESPLockedColor = Color3.fromRGB(255, 80, 80),
@@ -38,6 +40,10 @@ local Cfg = {
     AimFilterList = {},
     ESPFilterMode = "Blacklist",
     ESPFilterList = {},
+    AimTeamFilterMode = "Blacklist",
+    AimTeamFilterList = {},
+    ESPTeamFilterMode = "Blacklist",
+    ESPTeamFilterList = {},
     OffsetEnabled = false,
     OffsetX = 0,
     OffsetY = 0,
@@ -73,6 +79,13 @@ local LastTelemetry = {
     samples = 0,
     avg = 0,
 }
+
+local function getTeamColor(player)
+    if player.Team then
+        return player.Team.TeamColor.Color
+    end
+    return nil
+end
 
 local function updateTelemetryLabel()
     if not CalibTelemetry then return end
@@ -368,19 +381,36 @@ local function resolvePlayerInput(input)
     return "ambiguous", matches
 end
 
-local function inList(list, playerName)
-    for _, n in ipairs(list) do if n == playerName then return true end end
+local function resolveTeamInput(input)
+    input = input:match("^%s*(.-)%s*$"):lower()
+    if input == "" then return "none", nil end
+    local teams = game:GetService("Teams")
+    local matches = {}
+    for _, team in ipairs(teams:GetTeams()) do
+        local name = team.Name:lower()
+        if name:find(input, 1, true) then
+            if name == input then return "ok", team.Name end
+            table.insert(matches, team.Name)
+        end
+    end
+    if #matches == 0 then return "none", nil end
+    if #matches == 1 then return "ok", matches[1] end
+    return "ambiguous", matches
+end
+
+local function inList(list, value)
+    for _, n in ipairs(list) do if n == value then return true end end
     return false
 end
 
-local function addToList(list, playerName)
-    if not inList(list, playerName) then table.insert(list, playerName); return true end
+local function addToList(list, value)
+    if not inList(list, value) then table.insert(list, value); return true end
     return false
 end
 
-local function removeFromList(list, playerName)
+local function removeFromList(list, value)
     for i, n in ipairs(list) do
-        if n == playerName then table.remove(list, i); return true end
+        if n == value then table.remove(list, i); return true end
     end
     return false
 end
@@ -395,8 +425,22 @@ local function passesESPFilter(player)
     return Cfg.ESPFilterMode == "Blacklist" and not inL or Cfg.ESPFilterMode == "Whitelist" and inL
 end
 
+local function passesAimTeamFilter(player)
+    if not player.Team then return Cfg.AimTeamFilterMode == "Blacklist" end
+    local inL = inList(Cfg.AimTeamFilterList, player.Team.Name)
+    return Cfg.AimTeamFilterMode == "Blacklist" and not inL or Cfg.AimTeamFilterMode == "Whitelist" and inL
+end
+
+local function passesESPTeamFilter(player)
+    if not player.Team then return Cfg.ESPTeamFilterMode == "Blacklist" end
+    local inL = inList(Cfg.ESPTeamFilterList, player.Team.Name)
+    return Cfg.ESPTeamFilterMode == "Blacklist" and not inL or Cfg.ESPTeamFilterMode == "Whitelist" and inL
+end
+
 local AimFilterLabel = nil
 local ESPFilterLabel = nil
+local AimTeamFilterLabel = nil
+local ESPTeamFilterLabel = nil
 
 local function refreshAimFilterDisplay()
     if not AimFilterLabel then return end
@@ -406,6 +450,16 @@ end
 local function refreshESPFilterDisplay()
     if not ESPFilterLabel then return end
     ESPFilterLabel:SetText(#Cfg.ESPFilterList == 0 and "(empty)" or table.concat(Cfg.ESPFilterList, "\n"))
+end
+
+local function refreshAimTeamFilterDisplay()
+    if not AimTeamFilterLabel then return end
+    AimTeamFilterLabel:SetText(#Cfg.AimTeamFilterList == 0 and "(empty)" or table.concat(Cfg.AimTeamFilterList, "\n"))
+end
+
+local function refreshESPTeamFilterDisplay()
+    if not ESPTeamFilterLabel then return end
+    ESPTeamFilterLabel:SetText(#Cfg.ESPTeamFilterList == 0 and "(empty)" or table.concat(Cfg.ESPTeamFilterList, "\n"))
 end
 
 local function smartAdd(input, list, refresh)
@@ -438,6 +492,48 @@ local function smartRemove(input, list, refresh)
     local raw = input:match("^%s*(.-)%s*$")
     if removeFromList(list, raw) then
         Library:Notify("Removed: " .. raw, 3)
+        refresh()
+    else
+        Library:Notify("Not in list: " .. raw, 2)
+    end
+end
+
+local function smartAddTeam(input, list, refresh)
+    local status, result = resolveTeamInput(input)
+    if status == "none" then
+        local raw = input:match("^%s*(.-)%s*$")
+        if raw ~= "" then
+            if addToList(list, raw) then
+                Library:Notify("Added team: " .. raw, 3)
+                refresh()
+            else
+                Library:Notify(raw .. " already in list.", 2)
+            end
+        else
+            Library:Notify("No team found: " .. input, 3)
+        end
+    elseif status == "ambiguous" then
+        Library:Notify("Ambiguous:\n" .. table.concat(result, "\n"), 6)
+    elseif status == "ok" then
+        if addToList(list, result) then
+            Library:Notify("Added team: " .. result, 3)
+            refresh()
+        else
+            Library:Notify(result .. " already in list.", 2)
+        end
+    end
+end
+
+local function smartRemoveTeam(input, list, refresh)
+    local status, result = resolveTeamInput(input)
+    if status == "ok" and removeFromList(list, result) then
+        Library:Notify("Removed team: " .. result, 3)
+        refresh()
+        return
+    end
+    local raw = input:match("^%s*(.-)%s*$")
+    if removeFromList(list, raw) then
+        Library:Notify("Removed team: " .. raw, 3)
         refresh()
     else
         Library:Notify("Not in list: " .. raw, 2)
@@ -521,6 +617,7 @@ local function getBestTarget()
         if not isAlive(player) then continue end
         if sameTeam(player) then continue end
         if not passesAimFilter(player) then continue end
+        if not passesAimTeamFilter(player) then continue end
         local char = player.Character
         local checkPart = char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
         if not checkPart then continue end
@@ -609,19 +706,48 @@ local function getDisplayName(player)
     else return player.DisplayName .. " (@" .. player.Name .. ")" end
 end
 
+local function buildNameLabel(player, distStuds)
+    local label = getDisplayName(player)
+    if Cfg.ESPDistance then
+        label = label .. "\n" .. math.round(distStuds) .. " studs"
+    end
+    return label
+end
+
+local function getESPColor(player, isLocked)
+    if isLocked then return Cfg.ESPLockedColor end
+    if Cfg.ESPMode == "Team" then return getTeamColor(player) or Cfg.ESPColor end
+    return Cfg.ESPColor
+end
+
+local function getESPTracerColor(player, isLocked)
+    if isLocked then return Cfg.ESPLockedColor end
+    if Cfg.ESPMode == "Team" then return getTeamColor(player) or Cfg.TracerColor end
+    return Cfg.TracerColor
+end
+
+local function getESPNameColor(player, isLocked)
+    if isLocked then return Cfg.ESPLockedColor end
+    if Cfg.ESPMode == "Team" then return getTeamColor(player) or Cfg.NameColor end
+    return Cfg.NameColor
+end
+
 local function updateESP()
+    local camPos = Camera.CFrame.Position
     for _, player in ipairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
         local obj = ESPObjects[player]
         if not obj then continue end
         local isLocked = LockedTarget == player
-        local fill = isLocked and Cfg.ESPLockedColor or Cfg.ESPColor
-        local show = Cfg.ESPEnabled and isAlive(player) and passesESPFilter(player)
+        local show = Cfg.ESPEnabled and isAlive(player) and passesESPFilter(player) and passesESPTeamFilter(player)
+        local fill = getESPColor(player, isLocked)
+
         obj.highlight.FillColor = fill
         obj.highlight.OutlineColor = darken(fill)
         obj.highlight.DepthMode = Cfg.HighlightMode == "AlwaysOnTop"
             and Enum.HighlightDepthMode.AlwaysOnTop
             or Enum.HighlightDepthMode.Occluded
+
         if Cfg.ESPHighlights and show then
             local char = player.Character
             if char then
@@ -633,6 +759,7 @@ local function updateESP()
         else
             obj.highlight.Enabled = false
         end
+
         if Cfg.ESPTracers and show then
             local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
             if hrp then
@@ -641,7 +768,7 @@ local function updateESP()
                     local c = getCenter()
                     obj.tracer.From = Vector2.new(c.X, Camera.ViewportSize.Y)
                     obj.tracer.To = Vector2.new(sp.X, sp.Y)
-                    obj.tracer.Color = isLocked and Cfg.ESPLockedColor or Cfg.TracerColor
+                    obj.tracer.Color = getESPTracerColor(player, isLocked)
                     obj.tracer.Visible = true
                 else
                     obj.tracer.Visible = false
@@ -652,13 +779,17 @@ local function updateESP()
         else
             obj.tracer.Visible = false
         end
-        if Cfg.ESPNames and show then
-            local head = player.Character and player.Character:FindFirstChild("Head")
-            if head then
+
+        if (Cfg.ESPNames or Cfg.ESPDistance) and show then
+            local char = player.Character
+            local head = char and char:FindFirstChild("Head")
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            if head and hrp then
                 local sp, on = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 1.8, 0))
                 if on then
-                    obj.nameText.Text = getDisplayName(player)
-                    obj.nameText.Color = isLocked and Cfg.ESPLockedColor or Cfg.NameColor
+                    local distStuds = (hrp.Position - camPos).Magnitude
+                    obj.nameText.Text = buildNameLabel(player, distStuds)
+                    obj.nameText.Color = getESPNameColor(player, isLocked)
                     obj.nameText.Position = Vector2.new(sp.X, sp.Y)
                     obj.nameText.Visible = true
                 else
@@ -942,7 +1073,7 @@ end)
 OffsetBox:AddDivider()
 
 addSliderWithInput(OffsetBox, "OffsetX", {
-    Text = "X — Right / Left", Default = 0, Min = -50, Max = 50, Rounding = 1, Suffix = " st",
+    Text = "X — Right / Left", Default = 0, Min = -75, Max = 75, Rounding = 1, Suffix = " st",
     Tooltip = "+ = target's right | – = target's left",
 }, function() Cfg.OffsetX = Options.OffsetX.Value end)
 OffsetBox:AddButton({Text = "Reset X", Func = function() Options.OffsetX:SetValue(0) end})
@@ -950,7 +1081,7 @@ OffsetBox:AddButton({Text = "Reset X", Func = function() Options.OffsetX:SetValu
 OffsetBox:AddDivider()
 
 addSliderWithInput(OffsetBox, "OffsetY", {
-    Text = "Y — Up / Down", Default = 0, Min = -50, Max = 50, Rounding = 1, Suffix = " st",
+    Text = "Y — Up / Down", Default = 0, Min = -75, Max = 75, Rounding = 1, Suffix = " st",
     Tooltip = "+ = up | – = down",
 }, function() Cfg.OffsetY = Options.OffsetY.Value end)
 OffsetBox:AddButton({Text = "Reset Y", Func = function() Options.OffsetY:SetValue(0) end})
@@ -958,7 +1089,7 @@ OffsetBox:AddButton({Text = "Reset Y", Func = function() Options.OffsetY:SetValu
 OffsetBox:AddDivider()
 
 addSliderWithInput(OffsetBox, "OffsetZ", {
-    Text = "Z — Forward / Back", Default = 0, Min = -50, Max = 50, Rounding = 1, Suffix = " st",
+    Text = "Z — Forward / Back", Default = 0, Min = -75, Max = 75, Rounding = 1, Suffix = " st",
     Tooltip = "+ = in front of target | – = behind target",
 }, function() Cfg.OffsetZ = Options.OffsetZ.Value end)
 OffsetBox:AddButton({Text = "Reset Z", Func = function() Options.OffsetZ:SetValue(0) end})
@@ -980,6 +1111,13 @@ local ESPBox = Tabs.ESP:AddLeftGroupbox("ESP")
 ESPBox:AddToggle("ESPEnabled", {Text = "Enable ESP", Default = true})
 Toggles.ESPEnabled:OnChanged(function() Cfg.ESPEnabled = Toggles.ESPEnabled.Value end)
 
+ESPBox:AddDropdown("ESPMode", {
+    Text = "ESP Mode", Default = "Standard",
+    Values = {"Standard", "Team"},
+    Tooltip = "Standard = custom colors | Team = uses each player's team color",
+})
+Options.ESPMode:OnChanged(function() Cfg.ESPMode = Options.ESPMode.Value end)
+
 ESPBox:AddToggle("ESPHighlights", {Text = "Highlights", Default = true})
 Toggles.ESPHighlights:OnChanged(function() Cfg.ESPHighlights = Toggles.ESPHighlights.Value end)
 
@@ -994,12 +1132,16 @@ Toggles.ESPTracers:OnChanged(function() Cfg.ESPTracers = Toggles.ESPTracers.Valu
 ESPBox:AddToggle("ESPNames", {Text = "Names", Default = true})
 Toggles.ESPNames:OnChanged(function() Cfg.ESPNames = Toggles.ESPNames.Value end)
 
+ESPBox:AddToggle("ESPDistance", {Text = "Distance", Default = true})
+Toggles.ESPDistance:OnChanged(function() Cfg.ESPDistance = Toggles.ESPDistance.Value end)
+
 ESPBox:AddDropdown("NameType", {
     Text = "Name Type", Default = "Display", Values = {"Display", "Username", "Both"},
 })
 Options.NameType:OnChanged(function() Cfg.NameType = Options.NameType.Value end)
 
 local ColorBox = Tabs.ESP:AddRightGroupbox("Colors")
+ColorBox:AddLabel("(Used in Standard mode)", true)
 
 ColorBox:AddLabel("ESP Color"):AddColorPicker("ESPColor", {Default = Cfg.ESPColor, Title = "ESP Color"})
 Options.ESPColor:OnChanged(function() Cfg.ESPColor = Options.ESPColor.Value end)
@@ -1013,8 +1155,8 @@ Options.TracerColor:OnChanged(function() Cfg.TracerColor = Options.TracerColor.V
 ColorBox:AddLabel("Name Color"):AddColorPicker("NameColor", {Default = Cfg.NameColor, Title = "Name Color"})
 Options.NameColor:OnChanged(function() Cfg.NameColor = Options.NameColor.Value end)
 
-local AimFLeft = Tabs.AimFilter:AddLeftGroupbox("Aimlock Filter")
-local AimFRight = Tabs.AimFilter:AddRightGroupbox("Aimlock List")
+local AimFLeft = Tabs.AimFilter:AddLeftGroupbox("Aimlock Player Filter")
+local AimFRight = Tabs.AimFilter:AddRightGroupbox("Aimlock Team Filter")
 
 AimFLeft:AddDropdown("AimFilterMode", {
     Text = "Filter Mode", Default = "Blacklist", Values = {"Blacklist", "Whitelist"},
@@ -1030,21 +1172,48 @@ AimFLeft:AddInput("AimFilterInput", {
 })
 Options.AimFilterInput:OnChanged(function() aimFilterInput = Options.AimFilterInput.Value end)
 
-AimFLeft:AddButton({Text = "Add to Aimlock Filter",
+AimFLeft:AddButton({Text = "Add Player",
     Func = function() smartAdd(aimFilterInput, Cfg.AimFilterList, refreshAimFilterDisplay) end})
-AimFLeft:AddButton({Text = "Remove from Aimlock Filter",
+AimFLeft:AddButton({Text = "Remove Player",
     Func = function() smartRemove(aimFilterInput, Cfg.AimFilterList, refreshAimFilterDisplay) end})
-AimFLeft:AddButton({Text = "Clear Aimlock Filter",
+AimFLeft:AddButton({Text = "Clear Player List",
     Func = function()
         table.clear(Cfg.AimFilterList)
         refreshAimFilterDisplay()
-        Library:Notify("Aimlock filter cleared.", 2)
+        Library:Notify("Aimlock player filter cleared.", 2)
     end})
 
-AimFilterLabel = AimFRight:AddLabel("(empty)", true)
+AimFilterLabel = AimFLeft:AddLabel("(empty)", true)
 
-local ESPFLeft = Tabs.ESPFilter:AddLeftGroupbox("ESP Filter")
-local ESPFRight = Tabs.ESPFilter:AddRightGroupbox("ESP List")
+AimFRight:AddDropdown("AimTeamFilterMode", {
+    Text = "Team Filter Mode", Default = "Blacklist", Values = {"Blacklist", "Whitelist"},
+    Tooltip = "Blacklist = target all teams except list | Whitelist = only target listed teams",
+})
+Options.AimTeamFilterMode:OnChanged(function() Cfg.AimTeamFilterMode = Options.AimTeamFilterMode.Value end)
+
+AimFRight:AddDivider()
+
+local aimTeamFilterInput = ""
+AimFRight:AddInput("AimTeamFilterInput", {
+    Text = "Team Name", Placeholder = "Partial team name...", Numeric = false, Finished = false,
+})
+Options.AimTeamFilterInput:OnChanged(function() aimTeamFilterInput = Options.AimTeamFilterInput.Value end)
+
+AimFRight:AddButton({Text = "Add Team",
+    Func = function() smartAddTeam(aimTeamFilterInput, Cfg.AimTeamFilterList, refreshAimTeamFilterDisplay) end})
+AimFRight:AddButton({Text = "Remove Team",
+    Func = function() smartRemoveTeam(aimTeamFilterInput, Cfg.AimTeamFilterList, refreshAimTeamFilterDisplay) end})
+AimFRight:AddButton({Text = "Clear Team List",
+    Func = function()
+        table.clear(Cfg.AimTeamFilterList)
+        refreshAimTeamFilterDisplay()
+        Library:Notify("Aimlock team filter cleared.", 2)
+    end})
+
+AimTeamFilterLabel = AimFRight:AddLabel("(empty)", true)
+
+local ESPFLeft = Tabs.ESPFilter:AddLeftGroupbox("ESP Player Filter")
+local ESPFRight = Tabs.ESPFilter:AddRightGroupbox("ESP Team Filter")
 
 ESPFLeft:AddDropdown("ESPFilterMode", {
     Text = "Filter Mode", Default = "Blacklist", Values = {"Blacklist", "Whitelist"},
@@ -1060,18 +1229,45 @@ ESPFLeft:AddInput("ESPFilterInput", {
 })
 Options.ESPFilterInput:OnChanged(function() espFilterInput = Options.ESPFilterInput.Value end)
 
-ESPFLeft:AddButton({Text = "Add to ESP Filter",
+ESPFLeft:AddButton({Text = "Add Player",
     Func = function() smartAdd(espFilterInput, Cfg.ESPFilterList, refreshESPFilterDisplay) end})
-ESPFLeft:AddButton({Text = "Remove from ESP Filter",
+ESPFLeft:AddButton({Text = "Remove Player",
     Func = function() smartRemove(espFilterInput, Cfg.ESPFilterList, refreshESPFilterDisplay) end})
-ESPFLeft:AddButton({Text = "Clear ESP Filter",
+ESPFLeft:AddButton({Text = "Clear Player List",
     Func = function()
         table.clear(Cfg.ESPFilterList)
         refreshESPFilterDisplay()
-        Library:Notify("ESP filter cleared.", 2)
+        Library:Notify("ESP player filter cleared.", 2)
     end})
 
-ESPFilterLabel = ESPFRight:AddLabel("(empty)", true)
+ESPFilterLabel = ESPFLeft:AddLabel("(empty)", true)
+
+ESPFRight:AddDropdown("ESPTeamFilterMode", {
+    Text = "Team Filter Mode", Default = "Blacklist", Values = {"Blacklist", "Whitelist"},
+    Tooltip = "Blacklist = show all teams except list | Whitelist = only show listed teams",
+})
+Options.ESPTeamFilterMode:OnChanged(function() Cfg.ESPTeamFilterMode = Options.ESPTeamFilterMode.Value end)
+
+ESPFRight:AddDivider()
+
+local espTeamFilterInput = ""
+ESPFRight:AddInput("ESPTeamFilterInput", {
+    Text = "Team Name", Placeholder = "Partial team name...", Numeric = false, Finished = false,
+})
+Options.ESPTeamFilterInput:OnChanged(function() espTeamFilterInput = Options.ESPTeamFilterInput.Value end)
+
+ESPFRight:AddButton({Text = "Add Team",
+    Func = function() smartAddTeam(espTeamFilterInput, Cfg.ESPTeamFilterList, refreshESPTeamFilterDisplay) end})
+ESPFRight:AddButton({Text = "Remove Team",
+    Func = function() smartRemoveTeam(espTeamFilterInput, Cfg.ESPTeamFilterList, refreshESPTeamFilterDisplay) end})
+ESPFRight:AddButton({Text = "Clear Team List",
+    Func = function()
+        table.clear(Cfg.ESPTeamFilterList)
+        refreshESPTeamFilterDisplay()
+        Library:Notify("ESP team filter cleared.", 2)
+    end})
+
+ESPTeamFilterLabel = ESPFRight:AddLabel("(empty)", true)
 
 local MenuGroup = Tabs.Settings:AddLeftGroupbox("Menu")
 
