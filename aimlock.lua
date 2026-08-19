@@ -24,6 +24,7 @@ local Cfg = {
     BoneTarget = "Head",
     WallCheck = true,
     TeamCheck = true,
+    MaxDistance = 0,        -- 0 = unlimited
     FOVCircleVisible = true,
     FOVCircleColor = Color3.fromRGB(255, 255, 255),
     FOVCircleTransparency = 0.2,
@@ -34,6 +35,8 @@ local Cfg = {
     ESPTracers = true,
     ESPNames = true,
     ESPDistance = true,
+    ESPHealthBars = true,
+    ESPMaxDistance = 0,     -- 0 = unlimited
     NameType = "Display",
     ESPColor = Color3.fromRGB(255, 255, 255),
     ESPLockedColor = Color3.fromRGB(255, 80, 80),
@@ -57,6 +60,7 @@ local Cfg = {
     GravityCompensation = false,
     CalibratedSpeed = nil,
     CalibSamples = {},
+    WatermarkEnabled = true,
 }
 
 local Unloaded = false
@@ -82,6 +86,43 @@ local LastTelemetry = {
     samples = 0,
     avg = 0,
 }
+
+-- ================================================
+-- WATERMARK
+-- ================================================
+local WatermarkDrawing = Drawing.new("Text")
+WatermarkDrawing.Size = 14
+WatermarkDrawing.Font = Drawing.Fonts.UI
+WatermarkDrawing.Outline = true
+WatermarkDrawing.OutlineColor = Color3.fromRGB(0, 0, 0)
+WatermarkDrawing.Color = Color3.fromRGB(255, 255, 255)
+WatermarkDrawing.Position = Vector2.new(8, 8)
+WatermarkDrawing.Visible = false
+
+local function updateWatermark()
+    if not Cfg.WatermarkEnabled then
+        WatermarkDrawing.Visible = false
+        return
+    end
+    local parts = {"Aimlock Suite"}
+    if LockedTarget then
+        local char = LockedTarget.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            local dist = math.round((hrp.Position - Camera.CFrame.Position).Magnitude)
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            local hp = hum and math.round(hum.Health) or 0
+            local maxhp = hum and math.round(hum.MaxHealth) or 0
+            parts[#parts + 1] = "Target: " .. LockedTarget.DisplayName
+            parts[#parts + 1] = dist .. " studs"
+            parts[#parts + 1] = hp .. "/" .. maxhp .. " HP"
+        end
+    else
+        parts[#parts + 1] = "No Target"
+    end
+    WatermarkDrawing.Text = table.concat(parts, " | ")
+    WatermarkDrawing.Visible = true
+end
 
 local function getTeamColor(player)
     if player.Team then
@@ -578,6 +619,13 @@ local function sameTeam(player)
     return player.Team ~= nil and player.Team == LocalPlayer.Team
 end
 
+local function getWorldDistance(player)
+    local char = player.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return math.huge end
+    return (hrp.Position - Camera.CFrame.Position).Magnitude
+end
+
 local function getTorso(char)
     return char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
 end
@@ -613,14 +661,20 @@ local function wallCheck(targetPart)
     return result.Instance ~= nil and result.Instance:IsDescendantOf(targetPart.Parent)
 end
 
+local function playerPassesAimChecks(player)
+    if player == LocalPlayer then return false end
+    if not isAlive(player) then return false end
+    if sameTeam(player) then return false end
+    if not passesAimFilter(player) then return false end
+    if not passesAimTeamFilter(player) then return false end
+    if Cfg.MaxDistance > 0 and getWorldDistance(player) > Cfg.MaxDistance then return false end
+    return true
+end
+
 local function getBestTarget()
     local best, bestDist = nil, math.huge
     for _, player in ipairs(Players:GetPlayers()) do
-        if player == LocalPlayer then continue end
-        if not isAlive(player) then continue end
-        if sameTeam(player) then continue end
-        if not passesAimFilter(player) then continue end
-        if not passesAimTeamFilter(player) then continue end
+        if not playerPassesAimChecks(player) then continue end
         local char = player.Character
         local checkPart = char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
         if not checkPart then continue end
@@ -632,6 +686,27 @@ local function getBestTarget()
         if dist < bestDist then bestDist = dist; best = player end
     end
     return best
+end
+
+-- Target switch: drops current lock and finds next closest within FOV
+local function switchTarget()
+    local prev = LockedTarget
+    local best, bestDist = nil, math.huge
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == prev then continue end
+        if not playerPassesAimChecks(player) then continue end
+        local char = player.Character
+        local checkPart = char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
+        if not checkPart then continue end
+        local sp, onScreen = Camera:WorldToViewportPoint(checkPart.Position)
+        if not onScreen then continue end
+        local dist = screenDist(sp)
+        if dist > Cfg.FOV then continue end
+        if not wallCheck(checkPart) then continue end
+        if dist < bestDist then bestDist = dist; best = player end
+    end
+    LockedTarget = best
+    LockedBone = best and resolveBone(best.Character) or nil
 end
 
 local function doAimlock()
@@ -658,6 +733,10 @@ end
 local function aimlockShouldFire()
     if not Cfg.AimlockEnabled then return false end
     return Options["AimlockKey"] and Options["AimlockKey"]:GetState() or false
+end
+
+local function targetSwitchPressed()
+    return Options["TargetSwitchKey"] and Options["TargetSwitchKey"]:GetState() or false
 end
 
 local FOVCircle = Drawing.new("Circle")
@@ -691,7 +770,15 @@ local function makeESP(player)
     nameText.OutlineColor = Color3.fromRGB(0, 0, 0)
     nameText.Center = true
     nameText.Visible = false
-    ESPObjects[player] = {highlight = hl, tracer = tracer, nameText = nameText}
+    -- Health bar: two lines, background (dark) and foreground (colored)
+    local hpBg = Drawing.new("Line")
+    hpBg.Thickness = 4
+    hpBg.Color = Color3.fromRGB(30, 30, 30)
+    hpBg.Visible = false
+    local hpBar = Drawing.new("Line")
+    hpBar.Thickness = 4
+    hpBar.Visible = false
+    ESPObjects[player] = {highlight = hl, tracer = tracer, nameText = nameText, hpBg = hpBg, hpBar = hpBar}
 end
 
 local function removeESP(player)
@@ -700,6 +787,8 @@ local function removeESP(player)
     obj.highlight:Destroy()
     obj.tracer:Remove()
     obj.nameText:Remove()
+    obj.hpBg:Remove()
+    obj.hpBar:Remove()
     ESPObjects[player] = nil
 end
 
@@ -735,6 +824,17 @@ local function getESPNameColor(player, isLocked)
     return Cfg.NameColor
 end
 
+-- Health bar color: green → yellow → red based on HP %
+local function getHealthColor(pct)
+    if pct > 0.6 then
+        return Color3.fromRGB(80, 220, 80)
+    elseif pct > 0.3 then
+        return Color3.fromRGB(220, 200, 50)
+    else
+        return Color3.fromRGB(220, 60, 60)
+    end
+end
+
 local function updateESP()
     local camPos = Camera.CFrame.Position
     for _, player in ipairs(Players:GetPlayers()) do
@@ -742,7 +842,9 @@ local function updateESP()
         local obj = ESPObjects[player]
         if not obj then continue end
         local isLocked = LockedTarget == player
-        local show = Cfg.ESPEnabled and isAlive(player) and passesESPFilter(player) and passesESPTeamFilter(player)
+        local worldDist = getWorldDistance(player)
+        local withinMaxDist = Cfg.ESPMaxDistance == 0 or worldDist <= Cfg.ESPMaxDistance
+        local show = Cfg.ESPEnabled and isAlive(player) and passesESPFilter(player) and passesESPTeamFilter(player) and withinMaxDist
         local fill = getESPColor(player, isLocked)
 
         obj.highlight.FillColor = fill
@@ -790,8 +892,7 @@ local function updateESP()
             if head and hrp then
                 local sp, on = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 1.8, 0))
                 if on then
-                    local distStuds = (hrp.Position - camPos).Magnitude
-                    obj.nameText.Text = buildNameLabel(player, distStuds)
+                    obj.nameText.Text = buildNameLabel(player, worldDist)
                     obj.nameText.Color = getESPNameColor(player, isLocked)
                     obj.nameText.Position = Vector2.new(sp.X, sp.Y)
                     obj.nameText.Visible = true
@@ -803,6 +904,44 @@ local function updateESP()
             end
         else
             obj.nameText.Visible = false
+        end
+
+        -- Health bars: drawn vertically to the left of the player's screen position
+        if Cfg.ESPHealthBars and show then
+            local char = player.Character
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            if hrp and hum and hum.MaxHealth > 0 then
+                local headPos = hrp.Position + Vector3.new(0, 3, 0)
+                local feetPos = hrp.Position - Vector3.new(0, 3, 0)
+                local topSP, topOn = Camera:WorldToViewportPoint(headPos)
+                local botSP, botOn = Camera:WorldToViewportPoint(feetPos)
+                if topOn and botOn then
+                    local barX = topSP.X - 8
+                    local topY = topSP.Y
+                    local botY = botSP.Y
+                    local pct = math.clamp(hum.Health / hum.MaxHealth, 0, 1)
+                    local fillY = botY + (topY - botY) * pct
+
+                    obj.hpBg.From = Vector2.new(barX, topY)
+                    obj.hpBg.To = Vector2.new(barX, botY)
+                    obj.hpBg.Visible = true
+
+                    obj.hpBar.From = Vector2.new(barX, fillY)
+                    obj.hpBar.To = Vector2.new(barX, botY)
+                    obj.hpBar.Color = getHealthColor(pct)
+                    obj.hpBar.Visible = true
+                else
+                    obj.hpBg.Visible = false
+                    obj.hpBar.Visible = false
+                end
+            else
+                obj.hpBg.Visible = false
+                obj.hpBar.Visible = false
+            end
+        else
+            obj.hpBg.Visible = false
+            obj.hpBar.Visible = false
         end
     end
 end
@@ -825,20 +964,33 @@ trackConn(Players.PlayerRemoving:Connect(function(player)
     removeESP(player)
 end))
 
+local switchWasActive = false
+
 trackConn(RunService.RenderStepped:Connect(function()
     if Unloaded then return end
     local shouldAim = aimlockShouldFire()
+
     if shouldAim then
+        -- Target switch: fires once per press
+        local switchNow = targetSwitchPressed()
+        if switchNow and not switchWasActive then
+            switchTarget()
+        end
+        switchWasActive = switchNow
+
         if not LockedTarget or not isAlive(LockedTarget) then
             LockedTarget = getBestTarget()
             LockedBone = LockedTarget and resolveBone(LockedTarget.Character) or nil
         end
         doAimlock()
     else
+        switchWasActive = false
         if LockedTarget then LockedTarget = nil; LockedBone = nil end
     end
+
     updateESP()
     updateFOVCircle()
+    updateWatermark()
     if LockedTarget then updateTelemetryLabel() end
 end))
 
@@ -896,12 +1048,18 @@ end)
 
 addSliderWithInput(AimBox, "FOVRadius", {
     Text = "FOV Radius", Default = 150, Min = 10, Max = 500, Rounding = 0,
+    Tooltip = "Screen pixel radius. 150 = comfortable. Lower = tighter acquisition.",
 }, function() Cfg.FOV = Options.FOVRadius.Value end)
 
 addSliderWithInput(AimBox, "Smoothing", {
     Text = "Smoothing", Default = 50, Min = 1, Max = 100, Rounding = 0, Suffix = "%",
     Tooltip = "1% = floaty, breaks away easily | 100% = instant snap",
 }, function() Cfg.Smoothing = Options.Smoothing.Value end)
+
+addSliderWithInput(AimBox, "MaxAimDistance", {
+    Text = "Max Aim Distance", Default = 0, Min = 0, Max = 2000, Rounding = 0, Suffix = " st",
+    Tooltip = "0 = unlimited. Aimlock ignores players beyond this world distance.",
+}, function() Cfg.MaxDistance = Options.MaxAimDistance.Value end)
 
 AimBox:AddDropdown("BoneTarget", {
     Text = "Bone Target", Default = "Head",
@@ -946,6 +1104,14 @@ end)
 
 BindBox:AddLabel("Aimlock Key"):AddKeyPicker("AimlockKey", {
     Default = "Q", Mode = "Hold", Text = "Aimlock", NoUI = false, SyncToggleState = false,
+})
+
+BindBox:AddDivider()
+
+BindBox:AddLabel("Target Switch Key"):AddKeyPicker("TargetSwitchKey", {
+    Default = "E", Mode = "Hold", Text = "Target Switch",
+    NoUI = false, SyncToggleState = false,
+    Tooltip = "While aimlock is held, press this to switch to the next closest target",
 })
 
 local FOVBox = Tabs.Aimlock:AddRightGroupbox("FOV Circle")
@@ -1138,6 +1304,14 @@ Toggles.ESPNames:OnChanged(function() Cfg.ESPNames = Toggles.ESPNames.Value end)
 ESPBox:AddToggle("ESPDistance", {Text = "Distance", Default = true})
 Toggles.ESPDistance:OnChanged(function() Cfg.ESPDistance = Toggles.ESPDistance.Value end)
 
+ESPBox:AddToggle("ESPHealthBars", {Text = "Health Bars", Default = true})
+Toggles.ESPHealthBars:OnChanged(function() Cfg.ESPHealthBars = Toggles.ESPHealthBars.Value end)
+
+addSliderWithInput(ESPBox, "ESPMaxDistance", {
+    Text = "Max Distance", Default = 0, Min = 0, Max = 5000, Rounding = 0, Suffix = " st",
+    Tooltip = "0 = unlimited. Hides ESP beyond this world distance.",
+}, function() Cfg.ESPMaxDistance = Options.ESPMaxDistance.Value end)
+
 ESPBox:AddDropdown("NameType", {
     Text = "Name Type", Default = "Display", Values = {"Display", "Username", "Both"},
 })
@@ -1282,6 +1456,12 @@ Library.ToggleKeybind = Options.MenuKeybind
 MenuGroup:AddToggle("ShowCursor", {Text = "Custom Cursor", Default = true})
 Toggles.ShowCursor:OnChanged(function() Library.ShowCustomCursor = Toggles.ShowCursor.Value end)
 
+MenuGroup:AddToggle("WatermarkEnabled", {Text = "Watermark", Default = true})
+Toggles.WatermarkEnabled:OnChanged(function()
+    Cfg.WatermarkEnabled = Toggles.WatermarkEnabled.Value
+    if not Cfg.WatermarkEnabled then WatermarkDrawing.Visible = false end
+end)
+
 MenuGroup:AddDivider()
 
 MenuGroup:AddButton({
@@ -1308,7 +1488,7 @@ MenuGroup:AddButton({
         if #Players:GetPlayers() <= 1 then
             Players.LocalPlayer:Kick("\nRejoining...")
             task.wait(0.3)
-            TeleportService:Teleport(game.PlaceId, Players.LocalPlayer)
+            TeleportService:Teleport(game.PlaceId)
         else
             TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, Players.LocalPlayer)
         end
@@ -1320,7 +1500,7 @@ MenuGroup:AddButton({
     Tooltip = "Hops to a different public server. Script auto-executes on arrival.",
     Func = function()
         queueScript()
-        TeleportService:TeleportAsync(game.PlaceId, {Players.LocalPlayer})
+        TeleportService:Teleport(game.PlaceId)
     end,
 })
 
@@ -1351,6 +1531,7 @@ Library:OnUnload(function()
     table.clear(Connections)
     for player, _ in pairs(ESPObjects) do removeESP(player) end
     FOVCircle:Remove()
+    WatermarkDrawing:Remove()
     Library.Unloaded = true
 end)
 
