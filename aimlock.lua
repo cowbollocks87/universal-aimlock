@@ -1317,10 +1317,10 @@ MenuGroup:AddButton({
 
 MenuGroup:AddButton({
     Text = "Server Hop",
-    Tooltip = "Teleports to a fresh server. Script auto-executes on arrival.",
+    Tooltip = "Hops to a different public server. Script auto-executes on arrival.",
     Func = function()
         queueScript()
-        TeleportService:Teleport(game.PlaceId, Players.LocalPlayer)
+        TeleportService:TeleportAsync(game.PlaceId, {Players.LocalPlayer})
     end,
 })
 
