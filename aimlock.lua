@@ -24,7 +24,7 @@ local Cfg = {
     BoneTarget = "Head",
     WallCheck = true,
     TeamCheck = true,
-    MaxDistance = 0,        -- 0 = unlimited
+    MaxDistance = 0,
     FOVCircleVisible = true,
     FOVCircleColor = Color3.fromRGB(255, 255, 255),
     FOVCircleTransparency = 0.2,
@@ -36,7 +36,7 @@ local Cfg = {
     ESPNames = true,
     ESPDistance = true,
     ESPHealthBars = true,
-    ESPMaxDistance = 0,     -- 0 = unlimited
+    ESPMaxDistance = 0,
     NameType = "Display",
     ESPColor = Color3.fromRGB(255, 255, 255),
     ESPLockedColor = Color3.fromRGB(255, 80, 80),
@@ -88,40 +88,176 @@ local LastTelemetry = {
 }
 
 -- ================================================
--- WATERMARK
+-- WATERMARK — draggable ScreenGui window
 -- ================================================
-local WatermarkDrawing = Drawing.new("Text")
-WatermarkDrawing.Size = 14
-WatermarkDrawing.Font = Drawing.Fonts.UI
-WatermarkDrawing.Outline = true
-WatermarkDrawing.OutlineColor = Color3.fromRGB(0, 0, 0)
-WatermarkDrawing.Color = Color3.fromRGB(255, 255, 255)
-WatermarkDrawing.Position = Vector2.new(8, 8)
-WatermarkDrawing.Visible = false
+local WatermarkGui = Instance.new("ScreenGui")
+WatermarkGui.Name = "AimlockWatermark"
+WatermarkGui.ResetOnSpawn = false
+WatermarkGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+WatermarkGui.IgnoreGuiInset = true
+WatermarkGui.Parent = gethui()
+
+local WatermarkFrame = Instance.new("Frame")
+WatermarkFrame.Name = "Frame"
+WatermarkFrame.Size = UDim2.new(0, 220, 0, 60)
+WatermarkFrame.Position = UDim2.new(0, 200, 0, 200)
+WatermarkFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+WatermarkFrame.BorderSizePixel = 0
+WatermarkFrame.ClipsDescendants = true
+WatermarkFrame.Parent = WatermarkGui
+
+local WatermarkCorner = Instance.new("UICorner")
+WatermarkCorner.CornerRadius = UDim.new(0, 6)
+WatermarkCorner.Parent = WatermarkFrame
+
+local TitleBar = Instance.new("Frame")
+TitleBar.Name = "TitleBar"
+TitleBar.Size = UDim2.new(1, 0, 0, 22)
+TitleBar.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+TitleBar.BorderSizePixel = 0
+TitleBar.Parent = WatermarkFrame
+
+local TitleCorner = Instance.new("UICorner")
+TitleCorner.CornerRadius = UDim.new(0, 6)
+TitleCorner.Parent = TitleBar
+
+-- Square off bottom corners of title bar
+local TitleSquare = Instance.new("Frame")
+TitleSquare.Size = UDim2.new(1, 0, 0.5, 0)
+TitleSquare.Position = UDim2.new(0, 0, 0.5, 0)
+TitleSquare.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+TitleSquare.BorderSizePixel = 0
+TitleSquare.Parent = TitleBar
+
+local TitleLabel = Instance.new("TextLabel")
+TitleLabel.Size = UDim2.new(1, -30, 1, 0)
+TitleLabel.Position = UDim2.new(0, 8, 0, 0)
+TitleLabel.BackgroundTransparency = 1
+TitleLabel.Text = "Aimlock Suite"
+TitleLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+TitleLabel.TextSize = 12
+TitleLabel.Font = Enum.Font.GothamBold
+TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
+TitleLabel.Parent = TitleBar
+
+local MinimizeBtn = Instance.new("TextButton")
+MinimizeBtn.Size = UDim2.new(0, 22, 0, 22)
+MinimizeBtn.Position = UDim2.new(1, -22, 0, 0)
+MinimizeBtn.BackgroundTransparency = 1
+MinimizeBtn.Text = "—"
+MinimizeBtn.TextColor3 = Color3.fromRGB(160, 160, 160)
+MinimizeBtn.TextSize = 12
+MinimizeBtn.Font = Enum.Font.GothamBold
+MinimizeBtn.Parent = TitleBar
+
+local ContentFrame = Instance.new("Frame")
+ContentFrame.Name = "Content"
+ContentFrame.Size = UDim2.new(1, 0, 1, -22)
+ContentFrame.Position = UDim2.new(0, 0, 0, 22)
+ContentFrame.BackgroundTransparency = 1
+ContentFrame.Parent = WatermarkFrame
+
+local WatermarkLabel = Instance.new("TextLabel")
+WatermarkLabel.Size = UDim2.new(1, -12, 1, 0)
+WatermarkLabel.Position = UDim2.new(0, 6, 0, 0)
+WatermarkLabel.BackgroundTransparency = 1
+WatermarkLabel.Text = "No Target"
+WatermarkLabel.TextColor3 = Color3.fromRGB(220, 220, 220)
+WatermarkLabel.TextSize = 12
+WatermarkLabel.Font = Enum.Font.Gotham
+WatermarkLabel.TextXAlignment = Enum.TextXAlignment.Left
+WatermarkLabel.TextYAlignment = Enum.TextYAlignment.Top
+WatermarkLabel.TextWrapped = true
+WatermarkLabel.Parent = ContentFrame
+
+WatermarkGui.Enabled = Cfg.WatermarkEnabled
+
+-- Minimize state
+local wmMinimized = false
+local wmFullHeight = 60
+
+local function setMinimized(state)
+    wmMinimized = state
+    if state then
+        WatermarkFrame.Size = UDim2.new(0, 220, 0, 22)
+        ContentFrame.Visible = false
+        MinimizeBtn.Text = "+"
+    else
+        WatermarkFrame.Size = UDim2.new(0, 220, 0, wmFullHeight)
+        ContentFrame.Visible = true
+        MinimizeBtn.Text = "—"
+    end
+end
+
+MinimizeBtn.MouseButton1Click:Connect(function()
+    setMinimized(not wmMinimized)
+end)
+
+-- Drag logic
+local dragging = false
+local dragStart = nil
+local startPos = nil
+
+TitleBar.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true
+        dragStart = input.Position
+        startPos = WatermarkFrame.Position
+    end
+end)
+
+TitleBar.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = false
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+        local delta = input.Position - dragStart
+        WatermarkFrame.Position = UDim2.new(
+            startPos.X.Scale,
+            startPos.X.Offset + delta.X,
+            startPos.Y.Scale,
+            startPos.Y.Offset + delta.Y
+        )
+    end
+end)
 
 local function updateWatermark()
     if not Cfg.WatermarkEnabled then
-        WatermarkDrawing.Visible = false
+        WatermarkGui.Enabled = false
         return
     end
-    local parts = {"Aimlock Suite"}
-    if LockedTarget then
+    WatermarkGui.Enabled = true
+    if wmMinimized then return end
+
+    local lines = {}
+    if LockedTarget and LockedTarget.Character then
         local char = LockedTarget.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if hrp then
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hrp and hum then
             local dist = math.round((hrp.Position - Camera.CFrame.Position).Magnitude)
-            local hum = char:FindFirstChildOfClass("Humanoid")
-            local hp = hum and math.round(hum.Health) or 0
-            local maxhp = hum and math.round(hum.MaxHealth) or 0
-            parts[#parts + 1] = "Target: " .. LockedTarget.DisplayName
-            parts[#parts + 1] = dist .. " studs"
-            parts[#parts + 1] = hp .. "/" .. maxhp .. " HP"
+            local hp = math.round(hum.Health)
+            local maxhp = math.round(hum.MaxHealth)
+            table.insert(lines, "Target: " .. LockedTarget.DisplayName)
+            table.insert(lines, dist .. " studs  |  " .. hp .. "/" .. maxhp .. " HP")
         end
     else
-        parts[#parts + 1] = "No Target"
+        table.insert(lines, "No Target")
     end
-    WatermarkDrawing.Text = table.concat(parts, " | ")
-    WatermarkDrawing.Visible = true
+
+    local newText = table.concat(lines, "\n")
+    WatermarkLabel.Text = newText
+
+    -- Resize height to fit content
+    local lineCount = #lines
+    local newHeight = 22 + 8 + (lineCount * 16)
+    wmFullHeight = newHeight
+    if not wmMinimized then
+        WatermarkFrame.Size = UDim2.new(0, 220, 0, newHeight)
+    end
 end
 
 local function getTeamColor(player)
@@ -688,7 +824,6 @@ local function getBestTarget()
     return best
 end
 
--- Target switch: drops current lock and finds next closest within FOV
 local function switchTarget()
     local prev = LockedTarget
     local best, bestDist = nil, math.huge
@@ -770,7 +905,6 @@ local function makeESP(player)
     nameText.OutlineColor = Color3.fromRGB(0, 0, 0)
     nameText.Center = true
     nameText.Visible = false
-    -- Health bar: two lines, background (dark) and foreground (colored)
     local hpBg = Drawing.new("Line")
     hpBg.Thickness = 4
     hpBg.Color = Color3.fromRGB(30, 30, 30)
@@ -824,7 +958,6 @@ local function getESPNameColor(player, isLocked)
     return Cfg.NameColor
 end
 
--- Health bar color: green → yellow → red based on HP %
 local function getHealthColor(pct)
     if pct > 0.6 then
         return Color3.fromRGB(80, 220, 80)
@@ -906,7 +1039,6 @@ local function updateESP()
             obj.nameText.Visible = false
         end
 
-        -- Health bars: drawn vertically to the left of the player's screen position
         if Cfg.ESPHealthBars and show then
             local char = player.Character
             local hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -922,11 +1054,9 @@ local function updateESP()
                     local botY = botSP.Y
                     local pct = math.clamp(hum.Health / hum.MaxHealth, 0, 1)
                     local fillY = botY + (topY - botY) * pct
-
                     obj.hpBg.From = Vector2.new(barX, topY)
                     obj.hpBg.To = Vector2.new(barX, botY)
                     obj.hpBg.Visible = true
-
                     obj.hpBar.From = Vector2.new(barX, fillY)
                     obj.hpBar.To = Vector2.new(barX, botY)
                     obj.hpBar.Color = getHealthColor(pct)
@@ -969,15 +1099,12 @@ local switchWasActive = false
 trackConn(RunService.RenderStepped:Connect(function()
     if Unloaded then return end
     local shouldAim = aimlockShouldFire()
-
     if shouldAim then
-        -- Target switch: fires once per press
         local switchNow = targetSwitchPressed()
         if switchNow and not switchWasActive then
             switchTarget()
         end
         switchWasActive = switchNow
-
         if not LockedTarget or not isAlive(LockedTarget) then
             LockedTarget = getBestTarget()
             LockedBone = LockedTarget and resolveBone(LockedTarget.Character) or nil
@@ -987,7 +1114,6 @@ trackConn(RunService.RenderStepped:Connect(function()
         switchWasActive = false
         if LockedTarget then LockedTarget = nil; LockedBone = nil end
     end
-
     updateESP()
     updateFOVCircle()
     updateWatermark()
@@ -1459,7 +1585,7 @@ Toggles.ShowCursor:OnChanged(function() Library.ShowCustomCursor = Toggles.ShowC
 MenuGroup:AddToggle("WatermarkEnabled", {Text = "Watermark", Default = true})
 Toggles.WatermarkEnabled:OnChanged(function()
     Cfg.WatermarkEnabled = Toggles.WatermarkEnabled.Value
-    if not Cfg.WatermarkEnabled then WatermarkDrawing.Visible = false end
+    WatermarkGui.Enabled = Cfg.WatermarkEnabled
 end)
 
 MenuGroup:AddDivider()
@@ -1531,7 +1657,7 @@ Library:OnUnload(function()
     table.clear(Connections)
     for player, _ in pairs(ESPObjects) do removeESP(player) end
     FOVCircle:Remove()
-    WatermarkDrawing:Remove()
+    WatermarkGui:Destroy()
     Library.Unloaded = true
 end)
 
